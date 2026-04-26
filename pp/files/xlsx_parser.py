@@ -1,14 +1,25 @@
 """
-Responsabilidade: extrair todos os pares (cliente, vendedor) do XLSX de comissões.
+Responsabilidade: extrair todos os registros (cliente, vendedor, apolice) do XLSX de comissões.
 
-Percorre todas as abas, localiza dinamicamente as colunas CLIENTE e VENDEDOR,
+Percorre todas as abas, localiza dinamicamente as colunas CLIENTE, VENDEDOR e APÓLICE,
 e retorna os registros encontrados junto com avisos de abas problemáticas.
 """
 
+import re
 from dataclasses import dataclass
 from typing import List, Tuple
 
 import pandas as pd
+
+
+# Palavras-chave para detectar a coluna de apólice no cabeçalho
+_APOLICE_KEYWORDS = [
+    "APÓLICE", "APOLICE",
+    "Nº APÓLICE", "N° APÓLICE", "Nº APOLICE", "N° APOLICE",
+    "NÚMERO DA APÓLICE", "NUMERO DA APOLICE",
+    "Nº DA APÓLICE", "N° DA APÓLICE",
+    "Nº DA APOLICE", "N° DA APOLICE",
+]
 
 
 @dataclass(frozen=True)
@@ -16,20 +27,49 @@ class XLSXRecord:
     cliente: str
     vendedor: str
     sheet_name: str
+    apolice: str
 
 
-def _find_header_row(df: pd.DataFrame) -> Tuple[int | None, int | None, int | None]:
+def _normalize_apolice(raw: str) -> str:
+    """
+    Normaliza número de apólice: remove espaços, pontos, hífens.
+    """
+    if not raw:
+        return ""
+    return re.sub(r"[\s.\-/]", "", str(raw).strip())
+
+
+def _find_header_row(
+    df: pd.DataFrame,
+) -> Tuple[int | None, int | None, int | None, int | None]:
     """
     Procura a linha do cabeçalho que contém CLIENTE e VENDEDOR.
-    Retorna (row_idx, cliente_col_idx, vendedor_col_idx) ou (None, None, None).
+    Também tenta encontrar a coluna APÓLICE.
+    Retorna (row_idx, cliente_col_idx, vendedor_col_idx, apolice_col_idx).
+    apolice_col_idx pode ser None se não encontrado.
     """
     for row_idx, row in df.iterrows():
         row_upper = [
             str(v).upper().strip() if pd.notna(v) else "" for v in row
         ]
         if "CLIENTE" in row_upper and "VENDEDOR" in row_upper:
-            return row_idx, row_upper.index("CLIENTE"), row_upper.index("VENDEDOR")
-    return None, None, None
+            cliente_col = row_upper.index("CLIENTE")
+            vendedor_col = row_upper.index("VENDEDOR")
+
+            # Tentar encontrar coluna de apólice
+            apolice_col = None
+            for col_idx, cell_text in enumerate(row_upper):
+                if not cell_text:
+                    continue
+                for keyword in _APOLICE_KEYWORDS:
+                    if keyword in cell_text:
+                        apolice_col = col_idx
+                        break
+                if apolice_col is not None:
+                    break
+
+            return row_idx, cliente_col, vendedor_col, apolice_col
+    return None, None, None, None
 
 
 def _extract_records_from_sheet(
@@ -39,7 +79,7 @@ def _extract_records_from_sheet(
     Extrai registros de uma aba.
     Retorna (registros, mensagem_de_aviso_ou_None).
     """
-    header_row_idx, cliente_col, vendedor_col = _find_header_row(df)
+    header_row_idx, cliente_col, vendedor_col, apolice_col = _find_header_row(df)
 
     if header_row_idx is None:
         return [], f"Aba '{sheet_name}': cabeçalho CLIENTE/VENDEDOR não encontrado — aba ignorada."
@@ -59,8 +99,20 @@ def _extract_records_from_sheet(
         if not cliente_str or not vendedor_str:
             continue
 
+        # Extrair apólice se a coluna foi encontrada
+        apolice_str = ""
+        if apolice_col is not None:
+            apolice_val = row.iloc[apolice_col]
+            if pd.notna(apolice_val):
+                apolice_str = _normalize_apolice(str(apolice_val))
+
         records.append(
-            XLSXRecord(cliente=cliente_str, vendedor=vendedor_str, sheet_name=sheet_name)
+            XLSXRecord(
+                cliente=cliente_str,
+                vendedor=vendedor_str,
+                sheet_name=sheet_name,
+                apolice=apolice_str,
+            )
         )
 
     return records, None
