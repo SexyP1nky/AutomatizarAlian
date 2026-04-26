@@ -2,10 +2,11 @@
 Responsabilidade: interface com o usuário via Streamlit.
 
 Fluxo:
-  1. Recebe upload do PDF e do XLSX
-  2. Chama cada módulo em sequência
-  3. Exibe avisos e erros encontrados
-  4. Disponibiliza o arquivo de saída para download
+  1. Recebe upload de um ou mais PDFs e um ou mais XLSX
+  2. Consolida dados de todos os arquivos
+  3. Chama cada módulo em sequência
+  4. Exibe avisos e erros encontrados
+  5. Disponibiliza o arquivo de saída para download
 """
 
 import os
@@ -29,8 +30,15 @@ st.set_page_config(
 
 st.title("📋 Gerador de Controle de Estornos")
 st.markdown(
-    "Faça o upload do **relatório PDF** e da **planilha de comissões (XLSX)** "
+    "Faça o upload do(s) **relatório(s) PDF** e da(s) **planilha(s) de comissões (XLSX)** "
     "para gerar automaticamente o controle de estornos."
+)
+
+# ── Aviso de contato ──────────────────────────────────────────────────────────
+
+st.info(
+    "Em caso de mudança no formato dos arquivos ou problemas encontrados, "
+    "contacte o estagiário responsável."
 )
 
 # ── Inicialização do session_state ────────────────────────────────────────────
@@ -45,64 +53,103 @@ if "output_messages" not in st.session_state:
 col_pdf, col_xlsx = st.columns(2)
 
 with col_pdf:
-    pdf_file = st.file_uploader("Relatório de repasse (PDF)", type=["pdf"])
+    pdf_files = st.file_uploader(
+        "Relatório(s) de repasse (PDF)",
+        type=["pdf"],
+        accept_multiple_files=True,
+    )
 
 with col_xlsx:
-    xlsx_file = st.file_uploader("Planilha de comissões (XLSX)", type=["xlsx", "xls"])
+    xlsx_files = st.file_uploader(
+        "Planilha(s) de comissões (XLSX)",
+        type=["xlsx", "xls"],
+        accept_multiple_files=True,
+    )
 
 # Limpar resultado anterior quando o usuário troca os arquivos
-if pdf_file is None or xlsx_file is None:
+if not pdf_files or not xlsx_files:
     st.session_state.output_bytes = None
     st.session_state.output_messages = []
 
 # ── Botão de processamento ────────────────────────────────────────────────────
 
-if st.button("Gerar relatório", type="primary", disabled=not (pdf_file and xlsx_file)):
+if st.button(
+    "Gerar relatório",
+    type="primary",
+    disabled=not (pdf_files and xlsx_files),
+):
 
     # Limpar resultado anterior ao reprocessar
     st.session_state.output_bytes = None
     st.session_state.output_messages = []
 
     with tempfile.TemporaryDirectory() as tmp_dir:
-        pdf_path = os.path.join(tmp_dir, "input.pdf")
-        xlsx_path = os.path.join(tmp_dir, "input.xlsx")
         output_path = os.path.join(tmp_dir, "controle_estornos.xlsx")
 
-        with open(pdf_path, "wb") as f:
-            f.write(pdf_file.read())
-        with open(xlsx_path, "wb") as f:
-            f.write(xlsx_file.read())
+        # ── Etapa 1: leitura de todos os PDFs ─────────────────────────────────
+        all_pdf_records = []
+        seen_pdf_keys = set()
 
-        # ── Etapa 1: leitura do PDF ───────────────────────────────────────────
-        with st.spinner("Lendo PDF..."):
-            try:
-                pdf_records = extract_negative_commission_records(pdf_path)
-            except Exception as e:
-                st.error(f"Erro ao ler o PDF: {e}")
-                st.stop()
+        with st.spinner(f"Lendo {len(pdf_files)} PDF(s)..."):
+            for idx, pdf_file in enumerate(pdf_files):
+                pdf_path = os.path.join(tmp_dir, f"input_{idx}.pdf")
+                with open(pdf_path, "wb") as f:
+                    f.write(pdf_file.read())
 
-        if not pdf_records:
-            st.warning("Nenhum registro com comissão negativa encontrado no PDF.")
+                try:
+                    records = extract_negative_commission_records(pdf_path)
+                except Exception as e:
+                    st.error(f"Erro ao ler o PDF '{pdf_file.name}': {e}")
+                    st.stop()
+
+                # Deduplicar registros entre múltiplos PDFs
+                for rec in records:
+                    key = (rec.segurado.upper(), rec.inicio_vig)
+                    if key not in seen_pdf_keys:
+                        seen_pdf_keys.add(key)
+                        all_pdf_records.append(rec)
+
+        if not all_pdf_records:
+            st.warning("Nenhum registro com comissão negativa encontrado nos PDFs.")
             st.stop()
 
-        st.info(f"✅ {len(pdf_records)} registro(s) com comissão negativa encontrado(s) no PDF.")
+        st.info(
+            f"✅ {len(all_pdf_records)} registro(s) com comissão negativa "
+            f"encontrado(s) em {len(pdf_files)} PDF(s)."
+        )
 
-        # ── Etapa 2: leitura do XLSX ──────────────────────────────────────────
-        with st.spinner("Lendo planilha..."):
-            try:
-                xlsx_records, xlsx_warnings = extract_client_vendor_pairs(xlsx_path)
-            except Exception as e:
-                st.error(f"Erro ao ler a planilha: {e}")
-                st.stop()
+        # ── Etapa 2: leitura de todos os XLSX ─────────────────────────────────
+        all_xlsx_records = []
+        all_xlsx_warnings = []
 
-        if xlsx_warnings:
-            with st.expander("⚠️ Problemas encontrados nas abas da planilha", expanded=True):
-                for w in xlsx_warnings:
+        with st.spinner(f"Lendo {len(xlsx_files)} planilha(s)..."):
+            for idx, xlsx_file in enumerate(xlsx_files):
+                xlsx_path = os.path.join(tmp_dir, f"input_{idx}.xlsx")
+                with open(xlsx_path, "wb") as f:
+                    f.write(xlsx_file.read())
+
+                try:
+                    records, warnings = extract_client_vendor_pairs(xlsx_path)
+                except Exception as e:
+                    st.error(f"Erro ao ler a planilha '{xlsx_file.name}': {e}")
+                    st.stop()
+
+                all_xlsx_records.extend(records)
+                all_xlsx_warnings.extend(warnings)
+
+        if all_xlsx_warnings:
+            with st.expander(
+                "⚠️ Problemas encontrados nas abas das planilhas",
+                expanded=True,
+            ):
+                for w in all_xlsx_warnings:
                     st.warning(w)
 
         # ── Etapa 3: cruzamento PDF × XLSX ───────────────────────────────────
         with st.spinner("Cruzando dados..."):
-            matched_records, not_found = match_records(pdf_records, xlsx_records)
+            matched_records, not_found = match_records(
+                all_pdf_records, all_xlsx_records
+            )
 
         if not_found:
             with st.expander(
@@ -125,7 +172,7 @@ if st.button("Gerar relatório", type="primary", disabled=not (pdf_file and xlsx
         # ── Etapa 4: geração do relatório ─────────────────────────────────────
         with st.spinner("Gerando XLSX..."):
             try:
-                build_report(matched_records, output_path)
+                build_report(matched_records, output_path, not_found=not_found)
             except Exception as e:
                 st.error(f"Erro ao gerar o relatório: {e}")
                 st.stop()
