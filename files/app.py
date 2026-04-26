@@ -33,6 +33,13 @@ st.markdown(
     "para gerar automaticamente o controle de estornos."
 )
 
+# ── Inicialização do session_state ────────────────────────────────────────────
+
+if "output_bytes" not in st.session_state:
+    st.session_state.output_bytes = None
+if "output_messages" not in st.session_state:
+    st.session_state.output_messages = []
+
 # ── Upload dos arquivos ───────────────────────────────────────────────────────
 
 col_pdf, col_xlsx = st.columns(2)
@@ -43,9 +50,18 @@ with col_pdf:
 with col_xlsx:
     xlsx_file = st.file_uploader("Planilha de comissões (XLSX)", type=["xlsx", "xls"])
 
+# Limpar resultado anterior quando o usuário troca os arquivos
+if pdf_file is None or xlsx_file is None:
+    st.session_state.output_bytes = None
+    st.session_state.output_messages = []
+
 # ── Botão de processamento ────────────────────────────────────────────────────
 
 if st.button("Gerar relatório", type="primary", disabled=not (pdf_file and xlsx_file)):
+
+    # Limpar resultado anterior ao reprocessar
+    st.session_state.output_bytes = None
+    st.session_state.output_messages = []
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         pdf_path = os.path.join(tmp_dir, "input.pdf")
@@ -114,14 +130,18 @@ if st.button("Gerar relatório", type="primary", disabled=not (pdf_file and xlsx
                 st.error(f"Erro ao gerar o relatório: {e}")
                 st.stop()
 
-        # ── Download ──────────────────────────────────────────────────────────
+        # ── Armazenar bytes no session_state para persistir entre re-runs ─────
         with open(output_path, "rb") as f:
-            output_bytes = f.read()
+            st.session_state.output_bytes = f.read()
 
         st.success("Relatório gerado com sucesso!")
-        st.download_button(
-            label="⬇️ Baixar controle_estornos.xlsx",
-            data=output_bytes,
-            file_name="controle_estornos.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
+
+# ── Download (renderizado fora do bloco de processamento) ─────────────────────
+
+if st.session_state.output_bytes is not None:
+    st.download_button(
+        label="⬇️ Baixar controle_estornos.xlsx",
+        data=st.session_state.output_bytes,
+        file_name="controle_estornos.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
