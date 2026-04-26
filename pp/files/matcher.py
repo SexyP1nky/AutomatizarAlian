@@ -2,8 +2,11 @@
 Responsabilidade: correlacionar segurados do PDF com clientes do XLSX.
 
 Para cada segurado com comissão negativa:
-- Busca correspondência exata (após normalização) no XLSX
-- Fallback: correspondência token a token com Ç ≈ C
+- Busca correspondência combinando apólice (100% igual se existir) e nome
+- 3 níveis de correspondência:
+    - EXATO: nome bate (exato ou ç≈c) E apólice bate (ou apólice não existe)
+    - APOLICE_DIFERENTE: nome bate (exato ou ç≈c) MAS apólice é diferente
+    - FUZZY: nome não bate exatamente, mas é > 85% similar.
 - Se encontrar múltiplos vendedores (client em abas diferentes), gera uma linha por vendedor
 - Se não encontrar, adiciona ao relatório de não encontrados
 """
@@ -11,6 +14,8 @@ Para cada segurado com comissão negativa:
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Dict, List, Tuple
+
+from thefuzz import fuzz
 
 from name_normalizer import names_match, normalize_name
 from pdf_parser import PDFRecord
@@ -22,6 +27,9 @@ class MatchedRecord:
     segurado: str       # nome original do PDF
     inicio_vig: str     # DD/MM/YYYY
     vendedor: str       # nome original do XLSX
+    match_type: str     # "EXATO", "APOLICE_DIFERENTE", "FUZZY"
+    apolice_pdf: str    # apólice que estava no PDF
+    apolice_xlsx: str   # apólice que estava no XLSX
 
 
 def _build_xlsx_index(
@@ -29,6 +37,7 @@ def _build_xlsx_index(
 ) -> Dict[str, List[XLSXRecord]]:
     """
     Constrói índice: nome_normalizado → lista de XLSXRecord.
+    Para buscas exatas.
     """
     index: Dict[str, List[XLSXRecord]] = defaultdict(list)
     for rec in xlsx_records:
@@ -37,24 +46,80 @@ def _build_xlsx_index(
     return index
 
 
+def _eval_match_type(
+    pdf_name: str,
+    pdf_apolice: str,
+    xlsx_name: str,
+    xlsx_apolice: str,
+    is_exact_name: bool
+) -> str:
+    """
+    Avalia o tipo de match baseado no nome e na apólice.
+    """
+    if pdf_apolice and xlsx_apolice and pdf_apolice != xlsx_apolice:
+        # Se as duas apólices existem e são diferentes, tem problema
+        if is_exact_name:
+            return "APOLICE_DIFERENTE"
+        else:
+            return "FUZZY_APOLICE_DIFERENTE"
+    else:
+        # Apólices batem, ou uma das duas está vazia
+        if is_exact_name:
+            return "EXATO"
+        else:
+            return "FUZZY"
+
+
 def _find_matches_for_segurado(
+    pdf_rec: PDFRecord,
     normalized_segurado: str,
     index: Dict[str, List[XLSXRecord]],
-) -> List[XLSXRecord]:
+    all_xlsx_records: List[XLSXRecord]
+) -> List[Tuple[XLSXRecord, str]]:
     """
     Tenta correspondência exata primeiro; depois, aproximação Ç ≈ C por token.
+    Se falhar, tenta Fuzzy matching.
+    Retorna lista de (XLSXRecord, match_type).
     """
-    # 1. Correspondência exata
+    matches = []
+
+    # 1. Correspondência exata no índice
     exact = index.get(normalized_segurado)
     if exact:
-        return exact
+        for rec in exact:
+            m_type = _eval_match_type(normalized_segurado, pdf_rec.apolice, normalize_name(rec.cliente), rec.apolice, True)
+            matches.append((rec, m_type))
+        return matches
 
-    # 2. Fallback: percorre o índice e testa token a token com regra do Ç
+    # 2. Fallback 1: percorre o índice e testa token a token com regra do Ç
     for normalized_client, records in index.items():
         if names_match(normalized_segurado, normalized_client):
-            return records
+            for rec in records:
+                m_type = _eval_match_type(normalized_segurado, pdf_rec.apolice, normalized_client, rec.apolice, True)
+                matches.append((rec, m_type))
+            return matches
 
-    return []
+    # 3. Fallback 2: Fuzzy matching
+    # Apenas se o nome for bem parecido (> 85)
+    best_score = 0
+    best_records = []
+    
+    for rec in all_xlsx_records:
+        norm_client = normalize_name(rec.cliente)
+        score = fuzz.token_sort_ratio(normalized_segurado, norm_client)
+        if score > 85:
+            if score > best_score:
+                best_score = score
+                best_records = [rec]
+            elif score == best_score:
+                best_records.append(rec)
+                
+    if best_records:
+        for rec in best_records:
+            m_type = _eval_match_type(normalized_segurado, pdf_rec.apolice, normalize_name(rec.cliente), rec.apolice, False)
+            matches.append((rec, m_type))
+
+    return matches
 
 
 def match_records(
@@ -75,18 +140,21 @@ def match_records(
 
     for pdf_rec in pdf_records:
         normalized = normalize_name(pdf_rec.segurado)
-        xlsx_matches = _find_matches_for_segurado(normalized, index)
+        xlsx_matches = _find_matches_for_segurado(pdf_rec, normalized, index, xlsx_records)
 
         if not xlsx_matches:
             not_found.append(pdf_rec.segurado)
             continue
 
-        for xlsx_rec in xlsx_matches:
+        for xlsx_rec, match_type in xlsx_matches:
             matched.append(
                 MatchedRecord(
                     segurado=pdf_rec.segurado,
                     inicio_vig=pdf_rec.inicio_vig,
                     vendedor=xlsx_rec.vendedor,
+                    match_type=match_type,
+                    apolice_pdf=pdf_rec.apolice,
+                    apolice_xlsx=xlsx_rec.apolice
                 )
             )
 

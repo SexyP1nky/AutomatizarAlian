@@ -2,3 +2,6 @@ streamlit
 pdfplumber
 pandas
 openpyxl
+thefuzz
+python-Levenshtein
+xlrd

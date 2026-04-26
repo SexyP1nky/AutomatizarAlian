@@ -4,7 +4,7 @@ Responsabilidade: montar o arquivo XLSX de saída com as regras definidas.
 Estrutura do arquivo gerado:
   Aba "ESTORNOS":
     Linha 1  (A1)  : Mês/ano atual + "VENDEDORES", em maiúsculas, negrito
-    Linha 2        : Cabeçalhos em negrito/maiúsculas: CLIENTE | SITUAÇÃO | COMISSAO | VEND/CORRETORA | VALOR ESTORNO
+    Linha 2        : Cabeçalhos em negrito/maiúsculas: CLIENTE | SITUAÇÃO | COMISSAO | VEND/CORRETORA | VALOR ESTORNO | OBSERVAÇÃO
     Linhas 3..N   : Uma linha por MatchedRecord
     Última linha  : TOTAL destacado com fundo amarelo na coluna VALOR ESTORNO
 
@@ -31,11 +31,12 @@ from matcher import MatchedRecord
 # ── Constantes de formatação ──────────────────────────────────────────────────
 
 _FONT_NAME = "Arial"
-_COL_HEADERS = ["CLIENTE", "SITUAÇÃO", "COMISSAO", "VEND/CORRETORA", "VALOR ESTORNO"]
-_COL_WIDTHS = [42, 12, 14, 22, 16]
+_COL_HEADERS = ["CLIENTE", "SITUAÇÃO", "COMISSAO", "VEND/CORRETORA", "VALOR ESTORNO", "OBSERVAÇÃO"]
+_COL_WIDTHS = [42, 12, 14, 22, 16, 40]
 
 _FILL_HEADER = PatternFill("solid", start_color="D9D9D9")   # cinza claro
 _FILL_TOTAL = PatternFill("solid", start_color="FFFF00")     # amarelo
+_FILL_WARNING = PatternFill("solid", start_color="FFCC99")   # laranja claro para alertas
 
 _MONTHS_PT = {
     1: "JAN", 2: "FEV", 3: "MAR", 4: "ABR",
@@ -105,6 +106,7 @@ def _write_data_rows(
         vendor_key = record.vendedor.upper().strip()
         valor = vendor_values.get(vendor_key, 30)
 
+        # Dados normais
         ws.cell(row=row_idx, column=1, value=record.segurado.upper())
         ws.cell(row=row_idx, column=2, value="ESTORNO")
         ws.cell(row=row_idx, column=3, value=_format_inicio_vig(record.inicio_vig))
@@ -112,6 +114,22 @@ def _write_data_rows(
 
         valor_cell = ws.cell(row=row_idx, column=5, value=valor)
         valor_cell.number_format = 'R$ #,##0'
+
+        # Tratamento de OBSERVAÇÃO para matches incertos
+        obs_text = ""
+        if record.match_type != "EXATO":
+            if record.match_type == "APOLICE_DIFERENTE":
+                obs_text = f"VERIFICAR - APÓLICE DIFERENTE (PDF: {record.apolice_pdf} vs XLSX: {record.apolice_xlsx})"
+            elif record.match_type == "FUZZY_APOLICE_DIFERENTE":
+                obs_text = f"VERIFICAR - MATCH APROXIMADO E APÓLICE DIFERENTE"
+            elif record.match_type == "FUZZY":
+                obs_text = "VERIFICAR - MATCH APROXIMADO PELO NOME"
+                
+            obs_cell = ws.cell(row=row_idx, column=6, value=obs_text)
+            
+            # Pinta a linha inteira de laranja claro para chamar atenção
+            for col in range(1, 7):
+                ws.cell(row=row_idx, column=col).fill = _FILL_WARNING
 
 
 def _write_total_row(ws, total_row: int, first_data_row: int) -> None:
@@ -135,7 +153,7 @@ def _write_total_row(ws, total_row: int, first_data_row: int) -> None:
 
 
 def _set_column_widths(ws) -> None:
-    col_letters = ["A", "B", "C", "D", "E"]
+    col_letters = ["A", "B", "C", "D", "E", "F"]
     for letter, width in zip(col_letters, _COL_WIDTHS):
         ws.column_dimensions[letter].width = width
 
