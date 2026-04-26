@@ -7,10 +7,12 @@ O valor da comissão é descartado — interessa apenas identificar o segurado.
 Estratégia de extração (dupla, para máxima cobertura):
   1. Tenta via extract_tables() do pdfplumber (funciona bem para PDFs de teste
      com tabela única e para a maioria dos registros do PDF real)
+     - Detecção dinâmica de colunas via cabeçalho da tabela
+     - Fallback para posições fixas se o cabeçalho não for encontrado
   2. Fallback via extract_text() com regex para capturar linhas de dados que
      o extrator de tabelas não detectou (cobre registros "perdidos" no PDF real)
 
-Posições fixas na tabela:
+Posições fixas de fallback na tabela:
     col 0 → P/E ('P' ou 'E')
     col 3 → INICIO VIG
     col 4 → SEGURADO
@@ -19,23 +21,37 @@ Posições fixas na tabela:
 
 import re
 from dataclasses import dataclass
-from typing import List, Set
+from typing import List, Set, Tuple
 
 import pdfplumber
 
 
-# Posições de coluna confirmadas via inspeção do PDF real
-_COL_INICIO_VIG = 3
-_COL_SEGURADO = 4
-_COL_COMISSAO = 12
+# Posições de coluna de fallback confirmadas via inspeção do PDF real
+_DEFAULT_COL_INICIO_VIG = 3
+_DEFAULT_COL_SEGURADO = 4
+_DEFAULT_COL_COMISSAO = 12
 _MIN_COLS = 13
 _VALID_PE_VALUES = {"P", "E"}
 
+# Palavras-chave para detecção dinâmica de colunas no cabeçalho da tabela
+_HEADER_KEYWORDS = {
+    "segurado": ["SEGURADO", "NOME", "CLIENTE"],
+    "inicio_vig": ["INICIO VIG", "INÍCIO VIG", "INICIO", "INÍCIO", "VIGENCIA", "VIGÊNCIA"],
+    "comissao": ["COMISSÃO", "COMISSAO", "COMISS"],
+}
+
 # Regex para extrair linhas de dados do texto bruto do PDF
 # Formato: P/E TIPO_SEGURO PROPOSTA DD/MM/YYYY NOME APOLICE ... COMISSAO
+# Expandido para capturar mais tipos de operação além de "SEGURO NOV" e "RENOV CORR"
 _LINE_RE = re.compile(
-    r"^[PE]\s+"                     # P ou E
-    r"(?:SEGURO NOV|RENOV CORR)\s+"  # tipo de seguro
+    r"^[PE]\s+"                      # P ou E
+    r"(?:"
+    r"SEGURO NOV|RENOV CORR|"        # tipos originais
+    r"ENDOSSO|CANCELAMENTO|"         # endosso e cancelamento
+    r"SEGURO\s+\w+|"                 # qualquer tipo de seguro (SEGURO XXX)
+    r"RENOV\s+\w+|"                  # qualquer tipo de renovação (RENOV XXX)
+    r"[A-Z]{2,}\s+[A-Z]{2,}"        # padrão genérico (duas palavras maiúsculas)
+    r")\s+"
     r"\d+\s+"                        # proposta
     r"(\d{2}/\d{2}/\d{4})\s+"       # inicio_vig (grupo 1)
     r"([A-ZÀ-ÿ\s]+?)\s+"           # segurado (grupo 2) — captura gulosa mínima de letras+espaços
@@ -75,18 +91,74 @@ def _is_negative_commission(comissao_cell) -> bool:
         return False
 
 
-def _extract_record_from_row(row: list) -> PDFRecord | None:
+def _detect_columns_from_header(
+    table: list,
+) -> Tuple[int | None, int | None, int | None]:
+    """
+    Tenta detectar as colunas SEGURADO, INICIO VIG e COMISSÃO
+    a partir da primeira linha (cabeçalho) de uma tabela.
+
+    Retorna (col_segurado, col_inicio_vig, col_comissao) ou (None, None, None).
+    """
+    if not table or not table[0]:
+        return None, None, None
+
+    header = [str(cell).upper().strip() if cell else "" for cell in table[0]]
+
+    col_segurado = None
+    col_inicio_vig = None
+    col_comissao = None
+
+    for col_idx, cell_text in enumerate(header):
+        if not cell_text:
+            continue
+
+        # Detectar coluna SEGURADO
+        if col_segurado is None:
+            for keyword in _HEADER_KEYWORDS["segurado"]:
+                if keyword in cell_text:
+                    col_segurado = col_idx
+                    break
+
+        # Detectar coluna INICIO VIG
+        if col_inicio_vig is None:
+            for keyword in _HEADER_KEYWORDS["inicio_vig"]:
+                if keyword in cell_text:
+                    col_inicio_vig = col_idx
+                    break
+
+        # Detectar coluna COMISSÃO
+        if col_comissao is None:
+            for keyword in _HEADER_KEYWORDS["comissao"]:
+                if keyword in cell_text:
+                    col_comissao = col_idx
+                    break
+
+    # Só retorna se encontrou TODAS as colunas necessárias
+    if col_segurado is not None and col_inicio_vig is not None and col_comissao is not None:
+        return col_segurado, col_inicio_vig, col_comissao
+
+    return None, None, None
+
+
+def _extract_record_from_row(
+    row: list,
+    col_segurado: int,
+    col_inicio_vig: int,
+    col_comissao: int,
+    min_cols: int,
+) -> PDFRecord | None:
     """
     Valida e extrai PDFRecord de uma linha da tabela.
     Retorna None se a linha não for uma linha de dados válida.
     """
-    if len(row) < _MIN_COLS:
+    if len(row) < min_cols:
         return None
     if str(row[0]).strip() not in _VALID_PE_VALUES:
         return None
 
-    segurado = row[_COL_SEGURADO]
-    inicio_vig = row[_COL_INICIO_VIG]
+    segurado = row[col_segurado]
+    inicio_vig = row[col_inicio_vig]
 
     if not segurado or not inicio_vig:
         return None
@@ -103,19 +175,35 @@ def _extract_record_from_row(row: list) -> PDFRecord | None:
 def _extract_from_tables(page) -> List[PDFRecord]:
     """
     Extrai registros com comissão negativa usando extract_tables().
+    Tenta detecção dinâmica de colunas; usa fallback para posições fixas.
     """
     records: List[PDFRecord] = []
     tables = page.extract_tables()
     for table in tables:
         if not table:
             continue
+
+        # Tenta detectar colunas dinamicamente pelo cabeçalho
+        detected = _detect_columns_from_header(table)
+        if detected != (None, None, None):
+            col_segurado, col_inicio_vig, col_comissao = detected
+            min_cols = max(col_segurado, col_inicio_vig, col_comissao) + 1
+        else:
+            # Fallback: posições fixas
+            col_segurado = _DEFAULT_COL_SEGURADO
+            col_inicio_vig = _DEFAULT_COL_INICIO_VIG
+            col_comissao = _DEFAULT_COL_COMISSAO
+            min_cols = _MIN_COLS
+
         # Percorre TODAS as linhas de cada tabela para capturar
         # tanto PDFs com uma tabela grande quanto PDFs com mini-tabelas
         for row in table:
-            record = _extract_record_from_row(row)
+            record = _extract_record_from_row(
+                row, col_segurado, col_inicio_vig, col_comissao, min_cols
+            )
             if record is None:
                 continue
-            if _is_negative_commission(row[_COL_COMISSAO]):
+            if _is_negative_commission(row[col_comissao]):
                 records.append(record)
     return records
 

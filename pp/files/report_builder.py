@@ -2,10 +2,15 @@
 Responsabilidade: montar o arquivo XLSX de saída com as regras definidas.
 
 Estrutura do arquivo gerado:
-  Linha 1  (A1)  : Mês/ano atual + "VENDEDORES", em maiúsculas, negrito
-  Linha 2        : Cabeçalhos em negrito/maiúsculas: CLIENTE | SITUAÇÃO | COMISSAO | VEND/CORRETORA | VALOR ESTORNO
-  Linhas 3..N   : Uma linha por MatchedRecord
-  Última linha  : TOTAL destacado com fundo amarelo na coluna VALOR ESTORNO
+  Aba "ESTORNOS":
+    Linha 1  (A1)  : Mês/ano atual + "VENDEDORES", em maiúsculas, negrito
+    Linha 2        : Cabeçalhos em negrito/maiúsculas: CLIENTE | SITUAÇÃO | COMISSAO | VEND/CORRETORA | VALOR ESTORNO
+    Linhas 3..N   : Uma linha por MatchedRecord
+    Última linha  : TOTAL destacado com fundo amarelo na coluna VALOR ESTORNO
+
+  Aba "NÃO ENCONTRADOS" (quando houver):
+    Linha 1        : Cabeçalho "SEGURADO" em negrito
+    Linhas 2..N   : Um nome por linha
 
 Regra de VALOR ESTORNO:
   - Conta quantas vezes cada vendedor aparece na tabela de saída (coluna VEND/CORRETORA)
@@ -135,12 +140,43 @@ def _set_column_widths(ws) -> None:
         ws.column_dimensions[letter].width = width
 
 
+def _write_not_found_sheet(wb, not_found: List[str]) -> None:
+    """
+    Cria uma aba "NÃO ENCONTRADOS" no workbook com a lista de segurados
+    que não foram localizados na planilha de comissões.
+    """
+    ws = wb.create_sheet(title="NÃO ENCONTRADOS")
+
+    # Cabeçalho
+    header_cell = ws.cell(row=1, column=1, value="SEGURADO")
+    header_cell.font = Font(name=_FONT_NAME, bold=True)
+    header_cell.fill = _FILL_HEADER
+    header_cell.alignment = Alignment(horizontal="center")
+
+    # Dados
+    for row_idx, name in enumerate(not_found, start=2):
+        cell = ws.cell(row=row_idx, column=1, value=name.upper())
+        cell.font = Font(name=_FONT_NAME)
+
+    # Largura da coluna
+    ws.column_dimensions["A"].width = 50
+
+
 # ── Ponto de entrada público ──────────────────────────────────────────────────
 
-def build_report(records: List[MatchedRecord], output_path: str) -> None:
+def build_report(
+    records: List[MatchedRecord],
+    output_path: str,
+    not_found: List[str] | None = None,
+) -> None:
     """
     Gera o XLSX de controle de estornos em output_path.
     Levanta ValueError se records estiver vazio.
+
+    Parâmetros:
+        records    — lista de MatchedRecord (segurado × vendedor)
+        output_path — caminho do arquivo de saída
+        not_found  — lista de nomes de segurados sem correspondência (opcional)
     """
     if not records:
         raise ValueError("Nenhum registro correspondido — relatório não gerado.")
@@ -161,5 +197,9 @@ def build_report(records: List[MatchedRecord], output_path: str) -> None:
     _write_total_row(ws, total_row, first_data_row)
 
     _set_column_widths(ws)
+
+    # Aba de não encontrados (quando houver)
+    if not_found:
+        _write_not_found_sheet(wb, not_found)
 
     wb.save(output_path)
