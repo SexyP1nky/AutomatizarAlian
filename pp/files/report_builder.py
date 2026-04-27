@@ -78,14 +78,15 @@ def _calculate_vendor_values(
     """
     Calcula o valor de estorno (30 ou 50) para cada registro.
 
-    Usa as contagens de vendas positivas por vendedor/mês para determinar:
-      - 4+ vendas positivas naquele mês → R$ 50
+    Usa as contagens de vendas por vendedor/mês (baseado na aba do XLSX)
+    para determinar:
+      - 4+ vendas naquele mês → R$ 50
       - 3 ou menos → R$ 30
 
     Retorna lista de valores na mesma ordem dos records.
     """
     return [
-        get_estorno_value(vendor_sales_counts, r.vendedor, r.inicio_vig)
+        get_estorno_value(vendor_sales_counts, r.vendedor, r.sheet_name)
         for r in records
     ]
 

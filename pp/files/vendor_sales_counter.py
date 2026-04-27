@@ -1,96 +1,108 @@
 """
-Responsabilidade: contar vendas positivas por vendedor por mês.
+Responsabilidade: contar vendas por vendedor por mês usando o XLSX.
 
 Fluxo:
-  1. Recebe registros positivos do PDF e registros do XLSX
-  2. Para cada registro positivo do PDF, encontra o vendedor no XLSX
-  3. Extrai o mês/ano do campo inicio_vig (DD/MM/YYYY → MM/YYYY)
-  4. Agrupa e conta por (vendedor_upper, mês_ano)
-  5. Retorna dicionário com as contagens
+  1. Recebe todos os registros do XLSX (já com sheet_name)
+  2. Extrai o mês de cada aba (ex: "JAN 26", "FEV 26 ELIDA" → "JAN", "FEV")
+  3. Agrupa e conta por (vendedor_upper, mês_normalizado)
+  4. Retorna dicionário com as contagens
+
+NOTA: Múltiplas abas podem representar o mesmo mês
+  (ex: "FEV 26 ELIDA" e "FEV 26 SUELANE" → ambas "FEV/26").
+  As contagens são somadas.
 
 A contagem é usada para decidir o valor de estorno:
-  - 4+ vendas positivas em um mês → R$ 50
+  - 4+ vendas em um mês → R$ 50
   - 3 ou menos → R$ 30
 """
 
+import re
 from collections import Counter
 from typing import Dict, List, Tuple
 
-from matcher import _build_xlsx_index, _find_matches_for_segurado
-from name_normalizer import normalize_name
-from pdf_parser import PDFRecord
 from xlsx_parser import XLSXRecord
 
 
-def extract_month_year(date_str: str) -> str:
-    """
-    Extrai mês/ano de uma data no formato DD/MM/YYYY.
+# Mapeamento de nomes de meses para número (para normalização)
+_MONTH_NAMES = {
+    "JAN": "01", "FEV": "02", "MAR": "03", "ABR": "04",
+    "MAI": "05", "JUN": "06", "JUL": "07", "AGO": "08",
+    "SET": "09", "OUT": "10", "NOV": "11", "DEZ": "12",
+}
 
-    Retorna string "MM/YYYY" (ex: "04/2026").
+
+def extract_month_from_sheet_name(sheet_name: str) -> str:
+    """
+    Extrai o mês/ano normalizado do nome de uma aba do XLSX.
+
+    Exemplos:
+        "JAN 26"          → "01/26"
+        "FEV 26 ELIDA"    → "02/26"
+        "FEV 26 SUELANE"  → "02/26"
+        "MAR 26"          → "03/26"
+
+    Retorna string "MM/YY" ou string vazia se não conseguir extrair.
+    """
+    upper = sheet_name.strip().upper()
+
+    for name, num in _MONTH_NAMES.items():
+        if upper.startswith(name):
+            # Extrair o ano (dois dígitos após o nome do mês)
+            rest = upper[len(name):].strip()
+            year_match = re.match(r"(\d{2,4})", rest)
+            if year_match:
+                year = year_match.group(1)
+                # Se ano com 4 dígitos, pegar últimos 2
+                if len(year) == 4:
+                    year = year[2:]
+                return f"{num}/{year}"
+            break
+
+    return ""
+
+
+def extract_month_from_date(date_str: str) -> str:
+    """
+    Extrai mês/ano de uma data DD/MM/YYYY e converte para formato "MM/YY".
+
+    Exemplos:
+        "12/01/2026" → "01/26"
+        "30/03/2026" → "03/26"
+
     Retorna string vazia se o formato for inválido.
     """
     try:
         parts = date_str.strip().split("/")
         if len(parts) == 3:
             month = parts[1]
-            year = parts[2]
+            year = parts[2][-2:]  # Últimos 2 dígitos
             return f"{month}/{year}"
     except (ValueError, IndexError, AttributeError):
         pass
     return ""
 
 
-def _match_positive_record_to_vendor(
-    pdf_rec: PDFRecord,
-    index: Dict[str, List[XLSXRecord]],
-    all_xlsx_records: List[XLSXRecord],
-) -> str:
-    """
-    Encontra o vendedor correspondente a um registro positivo do PDF.
-
-    Retorna o nome do vendedor em maiúsculas, ou string vazia se não encontrado.
-    Usa a mesma lógica de correspondência do matcher.
-    """
-    normalized = normalize_name(pdf_rec.segurado)
-    matches = _find_matches_for_segurado(pdf_rec, normalized, index, all_xlsx_records)
-
-    if not matches:
-        return ""
-
-    # Usa o primeiro match (prioridade: exato > fuzzy)
-    xlsx_rec, _ = matches[0]
-    return xlsx_rec.vendedor.upper().strip()
-
-
-def count_positive_sales_per_vendor_month(
-    positive_records: List[PDFRecord],
+def count_sales_per_vendor_month(
     xlsx_records: List[XLSXRecord],
 ) -> Dict[Tuple[str, str], int]:
     """
-    Conta vendas positivas por (vendedor, mês).
+    Conta vendas por (vendedor, mês) usando apenas os dados do XLSX.
 
-    Para cada registro positivo do PDF:
-      - Cruza com o XLSX para descobrir o vendedor
-      - Extrai o mês do inicio_vig
-      - Incrementa o contador de (vendedor_upper, mês_ano)
+    O mês é extraído do nome da aba (sheet_name).
+    Múltiplas abas do mesmo mês são somadas.
 
     Retorna:
-        dicionário {(vendedor_upper, "MM/YYYY"): contagem}
+        dicionário {(vendedor_upper, "MM/YY"): contagem}
     """
-    index = _build_xlsx_index(xlsx_records)
-
     counts: Counter = Counter()
 
-    for pdf_rec in positive_records:
-        vendor = _match_positive_record_to_vendor(pdf_rec, index, xlsx_records)
-        if not vendor:
+    for rec in xlsx_records:
+        month = extract_month_from_sheet_name(rec.sheet_name)
+        if not month:
             continue
 
-        month_year = extract_month_year(pdf_rec.inicio_vig)
-        if not month_year:
-            continue
-
-        counts[(vendor, month_year)] += 1
+        vendor_key = rec.vendedor.upper().strip()
+        counts[(vendor_key, month)] += 1
 
     return dict(counts)
 
@@ -98,24 +110,26 @@ def count_positive_sales_per_vendor_month(
 def get_estorno_value(
     vendor_sales_counts: Dict[Tuple[str, str], int],
     vendedor: str,
-    inicio_vig: str,
+    sheet_name: str,
 ) -> int:
     """
     Determina o valor de estorno (30 ou 50) para um vendedor em um mês.
 
+    O mês é extraído do nome da aba onde o vendedor foi encontrado.
+
     Parâmetros:
-        vendor_sales_counts — contagens de vendas positivas por (vendedor, mês)
+        vendor_sales_counts — contagens de vendas por (vendedor, mês) do XLSX
         vendedor            — nome do vendedor (será normalizado para upper/strip)
-        inicio_vig          — data de início de vigência (DD/MM/YYYY)
+        sheet_name          — nome da aba do XLSX onde o vendedor foi encontrado
 
     Retorna:
-        50 se o vendedor tem 4+ vendas positivas naquele mês, 30 caso contrário
+        50 se o vendedor tem 4+ vendas naquele mês, 30 caso contrário
     """
     vendor_key = vendedor.upper().strip()
-    month_year = extract_month_year(inicio_vig)
+    month = extract_month_from_sheet_name(sheet_name)
 
-    if not month_year:
+    if not month:
         return 30
 
-    count = vendor_sales_counts.get((vendor_key, month_year), 0)
+    count = vendor_sales_counts.get((vendor_key, month), 0)
     return 50 if count >= 4 else 30
