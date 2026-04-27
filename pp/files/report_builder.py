@@ -31,8 +31,8 @@ from matcher import MatchedRecord
 # ── Constantes de formatação ──────────────────────────────────────────────────
 
 _FONT_NAME = "Arial"
-_COL_HEADERS = ["CLIENTE", "SITUAÇÃO", "COMISSAO", "VEND/CORRETORA", "VALOR ESTORNO", "OBSERVAÇÃO"]
-_COL_WIDTHS = [42, 12, 14, 22, 16, 40]
+_COL_HEADERS = ["CLIENTE", "SITUAÇÃO", "COMISSAO", "VEND/CORRETORA", "Nº APÓLICE", "VALOR ESTORNO", "OBSERVAÇÃO"]
+_COL_WIDTHS = [42, 12, 14, 22, 18, 16, 40]
 
 _FILL_HEADER = PatternFill("solid", start_color="D9D9D9")   # cinza claro
 _FILL_TOTAL = PatternFill("solid", start_color="FFFF00")     # amarelo
@@ -111,8 +111,9 @@ def _write_data_rows(
         ws.cell(row=row_idx, column=2, value="ESTORNO")
         ws.cell(row=row_idx, column=3, value=_format_inicio_vig(record.inicio_vig))
         ws.cell(row=row_idx, column=4, value=record.vendedor.upper())
+        ws.cell(row=row_idx, column=5, value=record.apolice_pdf)
 
-        valor_cell = ws.cell(row=row_idx, column=5, value=valor)
+        valor_cell = ws.cell(row=row_idx, column=6, value=valor)
         valor_cell.number_format = 'R$ #,##0'
 
         # Tratamento de OBSERVAÇÃO para matches incertos
@@ -121,14 +122,18 @@ def _write_data_rows(
             if record.match_type == "APOLICE_DIFERENTE":
                 obs_text = f"VERIFICAR - APÓLICE DIFERENTE (PDF: {record.apolice_pdf} vs XLSX: {record.apolice_xlsx})"
             elif record.match_type == "FUZZY_APOLICE_DIFERENTE":
-                obs_text = f"VERIFICAR - MATCH APROXIMADO E APÓLICE DIFERENTE"
+                obs_text = f"VERIFICAR - MATCH APROXIMADO E APÓLICE DIFERENTE (PDF: {record.apolice_pdf} vs XLSX: {record.apolice_xlsx})"
             elif record.match_type == "FUZZY":
                 obs_text = "VERIFICAR - MATCH APROXIMADO PELO NOME"
+            elif record.match_type == "APOLICE_AUSENTE_XLSX":
+                obs_text = "VERIFICAR - NÚMERO DE APÓLICE AUSENTE NA PLANILHA"
+            elif record.match_type == "FUZZY_APOLICE_AUSENTE_XLSX":
+                obs_text = "VERIFICAR - MATCH APROXIMADO E NÚMERO DE APÓLICE AUSENTE NA PLANILHA"
                 
-            obs_cell = ws.cell(row=row_idx, column=6, value=obs_text)
+            obs_cell = ws.cell(row=row_idx, column=7, value=obs_text)
             
             # Pinta a linha inteira de laranja claro para chamar atenção
-            for col in range(1, 7):
+            for col in range(1, 8):
                 ws.cell(row=row_idx, column=col).fill = _FILL_WARNING
 
 
@@ -144,8 +149,8 @@ def _write_total_row(ws, total_row: int, first_data_row: int) -> None:
     last_data_row = total_row - 1
     total_cell = ws.cell(
         row=total_row,
-        column=5,
-        value=f"=SUM(E{first_data_row}:E{last_data_row})",
+        column=6,
+        value=f"=SUM(F{first_data_row}:F{last_data_row})",
     )
     total_cell.font = bold_font
     total_cell.fill = _FILL_TOTAL
@@ -153,7 +158,7 @@ def _write_total_row(ws, total_row: int, first_data_row: int) -> None:
 
 
 def _set_column_widths(ws) -> None:
-    col_letters = ["A", "B", "C", "D", "E", "F"]
+    col_letters = ["A", "B", "C", "D", "E", "F", "G"]
     for letter, width in zip(col_letters, _COL_WIDTHS):
         ws.column_dimensions[letter].width = width
 
