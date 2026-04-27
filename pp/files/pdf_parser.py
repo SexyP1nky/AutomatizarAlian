@@ -95,6 +95,18 @@ def _is_negative_commission(comissao_cell) -> bool:
         return False
 
 
+def _is_positive_commission(comissao_cell) -> bool:
+    if comissao_cell is None:
+        return False
+    raw = str(comissao_cell).strip()
+    if not raw or raw == "None":
+        return False
+    try:
+        return _parse_br_float(raw) > 0
+    except ValueError:
+        return False
+
+
 def _normalize_apolice(raw: str) -> str:
     """
     Normaliza número de apólice: remove espaços, pontos, hífens.
@@ -222,10 +234,14 @@ def _extract_record_from_row(
     return segurado_str, inicio_vig_str
 
 
-def _extract_from_tables(page) -> List[PDFRecord]:
+def _extract_from_tables(page, commission_filter) -> List[PDFRecord]:
     """
-    Extrai registros com comissão negativa usando extract_tables().
+    Extrai registros de uma página usando extract_tables().
     Tenta detecção dinâmica de colunas; usa fallback para posições fixas.
+
+    Parâmetros:
+        page              — página do pdfplumber
+        commission_filter  — função que recebe o valor da comissão e retorna bool
     """
     records: List[PDFRecord] = []
     tables = page.extract_tables()
@@ -253,7 +269,7 @@ def _extract_from_tables(page) -> List[PDFRecord]:
             )
             if segurado is None:
                 continue
-            if _is_negative_commission(row[col_comissao]):
+            if commission_filter(row[col_comissao]):
                 apolice = _extract_apolice_from_table(table, row_idx, col_apolice)
                 records.append(PDFRecord(
                     segurado=segurado,
@@ -263,10 +279,14 @@ def _extract_from_tables(page) -> List[PDFRecord]:
     return records
 
 
-def _extract_from_text(page) -> List[PDFRecord]:
+def _extract_from_text(page, commission_filter) -> List[PDFRecord]:
     """
-    Fallback: extrai registros com comissão negativa via texto bruto + regex.
+    Fallback: extrai registros via texto bruto + regex.
     Captura registros que extract_tables() perde.
+
+    Parâmetros:
+        page              — página do pdfplumber
+        commission_filter  — função que recebe o valor da comissão e retorna bool
     """
     records: List[PDFRecord] = []
     text = page.extract_text()
@@ -283,7 +303,7 @@ def _extract_from_text(page) -> List[PDFRecord]:
         apolice = _normalize_apolice(match.group(3))
         comissao_str = match.group(4)
 
-        if _is_negative_commission(comissao_str):
+        if commission_filter(comissao_str):
             records.append(PDFRecord(
                 segurado=segurado,
                 inicio_vig=inicio_vig,
@@ -293,9 +313,11 @@ def _extract_from_text(page) -> List[PDFRecord]:
     return records
 
 
-def extract_negative_commission_records(pdf_path: str) -> List[PDFRecord]:
+def _deduplicate_and_collect(
+    pdf_path: str, commission_filter
+) -> List[PDFRecord]:
     """
-    Abre o PDF e retorna todos os PDFRecord onde COMISSÃO < 0.
+    Abre o PDF e retorna PDFRecords filtrados por commission_filter.
 
     Usa extração dupla (tabelas + texto) e mescla resultados sem duplicatas.
     A chave de deduplicação é (segurado_upper, inicio_vig).
@@ -318,10 +340,20 @@ def extract_negative_commission_records(pdf_path: str) -> List[PDFRecord]:
 
     with pdfplumber.open(pdf_path) as pdf:
         for page in pdf.pages:
-            for rec in _extract_from_tables(page):
+            for rec in _extract_from_tables(page, commission_filter):
                 _add_if_new(rec)
 
-            for rec in _extract_from_text(page):
+            for rec in _extract_from_text(page, commission_filter):
                 _add_if_new(rec)
 
     return records
+
+
+def extract_negative_commission_records(pdf_path: str) -> List[PDFRecord]:
+    """Abre o PDF e retorna todos os PDFRecord onde COMISSÃO < 0."""
+    return _deduplicate_and_collect(pdf_path, _is_negative_commission)
+
+
+def extract_positive_commission_records(pdf_path: str) -> List[PDFRecord]:
+    """Abre o PDF e retorna todos os PDFRecord onde COMISSÃO > 0."""
+    return _deduplicate_and_collect(pdf_path, _is_positive_commission)

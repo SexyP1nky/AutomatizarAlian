@@ -15,8 +15,9 @@ import tempfile
 import streamlit as st
 
 from matcher import match_records
-from pdf_parser import extract_negative_commission_records
+from pdf_parser import extract_negative_commission_records, extract_positive_commission_records
 from report_builder import build_report
+from vendor_sales_counter import count_positive_sales_per_vendor_month
 from xlsx_parser import extract_client_vendor_pairs
 
 
@@ -89,7 +90,9 @@ if st.button(
 
         # ── Etapa 1: leitura de todos os PDFs ─────────────────────────────────
         all_pdf_records = []
+        all_positive_records = []
         seen_pdf_keys = set()
+        seen_positive_keys = set()
 
         with st.spinner(f"Lendo {len(pdf_files)} PDF(s)..."):
             for idx, pdf_file in enumerate(pdf_files):
@@ -97,18 +100,31 @@ if st.button(
                 with open(pdf_path, "wb") as f:
                     f.write(pdf_file.read())
 
+                # Extrair registros negativos
                 try:
                     records = extract_negative_commission_records(pdf_path)
                 except Exception as e:
                     st.error(f"Erro ao ler o PDF '{pdf_file.name}': {e}")
                     st.stop()
 
-                # Deduplicar registros entre múltiplos PDFs
                 for rec in records:
                     key = (rec.segurado.upper(), rec.inicio_vig)
                     if key not in seen_pdf_keys:
                         seen_pdf_keys.add(key)
                         all_pdf_records.append(rec)
+
+                # Extrair registros positivos (para contagem de vendas)
+                try:
+                    positive_records = extract_positive_commission_records(pdf_path)
+                except Exception as e:
+                    st.error(f"Erro ao ler registros positivos do PDF '{pdf_file.name}': {e}")
+                    st.stop()
+
+                for rec in positive_records:
+                    key = (rec.segurado.upper(), rec.inicio_vig)
+                    if key not in seen_positive_keys:
+                        seen_positive_keys.add(key)
+                        all_positive_records.append(rec)
 
         if not all_pdf_records:
             st.warning("Nenhum registro com comissão negativa encontrado nos PDFs.")
@@ -116,6 +132,7 @@ if st.button(
 
         st.info(
             f"✅ {len(all_pdf_records)} registro(s) com comissão negativa "
+            f"e {len(all_positive_records)} registro(s) com comissão positiva "
             f"encontrado(s) em {len(pdf_files)} PDF(s)."
         )
 
@@ -152,6 +169,12 @@ if st.button(
                 all_pdf_records, all_xlsx_records
             )
 
+        # ── Etapa 3b: contagem de vendas positivas por vendedor/mês ───────────
+        with st.spinner("Calculando regra 30/50..."):
+            vendor_sales_counts = count_positive_sales_per_vendor_month(
+                all_positive_records, all_xlsx_records
+            )
+
         if not_found:
             with st.expander(
                 f"❌ {len(not_found)} segurado(s) NÃO encontrado(s) na planilha",
@@ -173,7 +196,12 @@ if st.button(
         # ── Etapa 4: geração do relatório ─────────────────────────────────────
         with st.spinner("Gerando XLSX..."):
             try:
-                build_report(matched_records, output_path, not_found=not_found)
+                build_report(
+                    matched_records,
+                    output_path,
+                    not_found=not_found,
+                    vendor_sales_counts=vendor_sales_counts,
+                )
             except Exception as e:
                 st.error(f"Erro ao gerar o relatório: {e}")
                 st.stop()

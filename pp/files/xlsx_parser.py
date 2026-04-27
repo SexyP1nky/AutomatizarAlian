@@ -30,6 +30,15 @@ class XLSXRecord:
     apolice: str
 
 
+def is_excluded_vendor(name: str) -> bool:
+    """
+    Retorna True se o nome do vendedor deve ser excluído da tabela.
+    Exclui APENAS o nome exato "SUELANE" (case-insensitive, strip).
+    Variações como "SUELANE J." ou "SUELANEJ" NÃO são excluídas.
+    """
+    return name.strip().upper() == "SUELANE"
+
+
 def _normalize_apolice(raw: str) -> str:
     """
     Normaliza número de apólice: remove espaços, pontos, hífens.
@@ -97,6 +106,10 @@ def _extract_records_from_sheet(
         vendedor_str = str(vendedor_val).strip()
 
         if not cliente_str or not vendedor_str:
+            continue
+
+        # Filtrar vendedor exatamente "SUELANE" (não variações)
+        if is_excluded_vendor(vendedor_str):
             continue
 
         # Extrair apólice se a coluna foi encontrada
