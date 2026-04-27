@@ -106,8 +106,15 @@ if st.button(
 
                 # Deduplicar registros entre múltiplos PDFs
                 for rec in records:
-                    key = (rec.segurado.upper(), rec.inicio_vig)
+                    key = (rec.segurado.upper(), rec.inicio_vig, rec.apolice)
+                    
                     if key not in seen_pdf_keys:
+                        # Se não tem apólice, evita adicionar se já existe uma entrada (com ou sem apólice)
+                        if not rec.apolice:
+                            exists = any(k[0] == key[0] and k[1] == key[1] for k in seen_pdf_keys)
+                            if exists:
+                                continue
+                                
                         seen_pdf_keys.add(key)
                         all_pdf_records.append(rec)
 

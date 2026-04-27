@@ -85,6 +85,27 @@ def _eval_match_type(
             return "FUZZY"
 
 
+def _filter_best_matches(
+    matches: List[Tuple[XLSXRecord, str]],
+) -> List[Tuple[XLSXRecord, str]]:
+    """
+    Se houver múltiplos matches para o mesmo cliente, tenta desempatar pela apólice.
+    Se algum deles for um match EXATO de apólice, retorna apenas ele(s).
+    Caso contrário, retorna todos (ambiguidade).
+    """
+    if len(matches) <= 1:
+        return matches
+
+    # Verifica se existe algum match com apólice exata (ou ausente no XLSX mas presente no PDF, etc)
+    # A prioridade é: EXATO > FUZZY > APOLICE_AUSENTE_XLSX > APOLICE_DIFERENTE
+    exact_matches = [m for m in matches if m[1] in ("EXATO", "FUZZY")]
+    if exact_matches:
+        # Se tem apólice exata, ignoramos os que têm apólice diferente
+        return exact_matches
+
+    return matches
+
+
 def _find_matches_for_segurado(
     pdf_rec: PDFRecord,
     normalized_segurado: str,
@@ -94,7 +115,7 @@ def _find_matches_for_segurado(
     """
     Tenta correspondência exata primeiro; depois, aproximação Ç ≈ C por token.
     Se falhar, tenta Fuzzy matching.
-    Retorna lista de (XLSXRecord, match_type).
+    Filtra para retornar apenas o melhor match (desempate por apólice).
     """
     matches = []
 
@@ -104,7 +125,7 @@ def _find_matches_for_segurado(
         for rec in exact:
             m_type = _eval_match_type(normalized_segurado, pdf_rec.apolice, normalize_name(rec.cliente), rec.apolice, True)
             matches.append((rec, m_type))
-        return matches
+        return _filter_best_matches(matches)
 
     # 2. Fallback 1: percorre o índice e testa token a token com regra do Ç
     for normalized_client, records in index.items():
@@ -112,17 +133,23 @@ def _find_matches_for_segurado(
             for rec in records:
                 m_type = _eval_match_type(normalized_segurado, pdf_rec.apolice, normalized_client, rec.apolice, True)
                 matches.append((rec, m_type))
-            return matches
+            return _filter_best_matches(matches)
 
     # 3. Fallback 2: Fuzzy matching
-    # Apenas se o nome for bem parecido (> 85)
     best_score = 0
     best_records = []
     
     for rec in all_xlsx_records:
         norm_client = normalize_name(rec.cliente)
         score = fuzz.token_sort_ratio(normalized_segurado, norm_client)
+        
+        # O limiar básico é 85, mas só aceitamos cego se > 92 ou se a apólice bater perfeitamente
         if score > 85:
+            apolice_matches = _compare_apolice(pdf_rec.apolice, rec.apolice)
+            # Se a apólice for diferente, exigimos um score bem maior (92) para evitar falsos positivos
+            if not apolice_matches and score <= 92:
+                continue
+
             if score > best_score:
                 best_score = score
                 best_records = [rec]
@@ -133,6 +160,7 @@ def _find_matches_for_segurado(
         for rec in best_records:
             m_type = _eval_match_type(normalized_segurado, pdf_rec.apolice, normalize_name(rec.cliente), rec.apolice, False)
             matches.append((rec, m_type))
+        return _filter_best_matches(matches)
 
     return matches
 

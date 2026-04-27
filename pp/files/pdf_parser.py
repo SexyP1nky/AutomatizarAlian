@@ -327,13 +327,24 @@ def _deduplicate_and_collect(
     records: List[PDFRecord] = []
 
     def _add_if_new(rec: PDFRecord) -> None:
-        key = (rec.segurado.upper(), rec.inicio_vig)
+        key = (rec.segurado.upper(), rec.inicio_vig, rec.apolice)
         existing = seen.get(key)
+        
         if existing is None:
+            # Se não tem apólice, vamos checar se já existe um registro sem apólice para mesma pessoa/data
+            if not rec.apolice:
+                # Procura se já existe a mesma pessoa/data (com ou sem apolice)
+                for k, v in list(seen.items()):
+                    if k[0] == rec.segurado.upper() and k[1] == rec.inicio_vig:
+                        # Se já existe, não adicionamos este novo (ele não tem apolice, não traz info nova)
+                        return
+                        
             seen[key] = rec
             records.append(rec)
+            
         elif not existing.apolice and rec.apolice:
             # Substitui se o novo registro tem apólice e o existente não
+            # Na verdade, com a nova key, isso só acontece se ambos tivessem apolice='' na key
             idx = records.index(existing)
             records[idx] = rec
             seen[key] = rec
