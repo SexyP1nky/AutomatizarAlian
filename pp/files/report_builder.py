@@ -20,12 +20,13 @@ Regra de VALOR ESTORNO:
 
 from collections import Counter
 from datetime import datetime
-from typing import List
+from typing import Dict, List, Tuple
 
 import openpyxl
 from openpyxl.styles import Alignment, Font, PatternFill
 
 from matcher import MatchedRecord
+from vendor_sales_counter import get_estorno_value
 
 
 # ── Constantes de formatação ──────────────────────────────────────────────────
@@ -70,16 +71,23 @@ def _current_month_label() -> str:
     return f"{_MONTHS_PT[now.month]}/{year_short} VENDEDORES"
 
 
-def _calculate_vendor_values(records: List[MatchedRecord]) -> dict[str, int]:
+def _calculate_vendor_values(
+    records: List[MatchedRecord],
+    vendor_sales_counts: Dict[Tuple[str, str], int],
+) -> List[int]:
     """
-    Conta ocorrências de cada vendedor na tabela de saída.
-    Retorna mapa: vendedor_upper → valor_em_reais (30 ou 50).
+    Calcula o valor de estorno (30 ou 50) para cada registro.
+
+    Usa as contagens de vendas positivas por vendedor/mês para determinar:
+      - 4+ vendas positivas naquele mês → R$ 50
+      - 3 ou menos → R$ 30
+
+    Retorna lista de valores na mesma ordem dos records.
     """
-    counts = Counter(r.vendedor.upper().strip() for r in records)
-    return {
-        vendor: 50 if count >= 4 else 30
-        for vendor, count in counts.items()
-    }
+    return [
+        get_estorno_value(vendor_sales_counts, r.vendedor, r.inicio_vig)
+        for r in records
+    ]
 
 
 # ── Funções de escrita de células ─────────────────────────────────────────────
@@ -100,11 +108,10 @@ def _write_column_headers(ws) -> None:
 
 
 def _write_data_rows(
-    ws, records: List[MatchedRecord], vendor_values: dict[str, int]
+    ws, records: List[MatchedRecord], vendor_values: List[int]
 ) -> None:
     for row_idx, record in enumerate(records, start=3):
-        vendor_key = record.vendedor.upper().strip()
-        valor = vendor_values.get(vendor_key, 30)
+        valor = vendor_values[row_idx - 3]
 
         # Dados normais
         ws.cell(row=row_idx, column=1, value=record.segurado.upper())
@@ -191,20 +198,25 @@ def build_report(
     records: List[MatchedRecord],
     output_path: str,
     not_found: List[str] | None = None,
+    vendor_sales_counts: Dict[Tuple[str, str], int] | None = None,
 ) -> None:
     """
     Gera o XLSX de controle de estornos em output_path.
     Levanta ValueError se records estiver vazio.
 
     Parâmetros:
-        records    — lista de MatchedRecord (segurado × vendedor)
-        output_path — caminho do arquivo de saída
-        not_found  — lista de nomes de segurados sem correspondência (opcional)
+        records              — lista de MatchedRecord (segurado × vendedor)
+        output_path          — caminho do arquivo de saída
+        not_found            — lista de nomes de segurados sem correspondência (opcional)
+        vendor_sales_counts  — contagens de vendas positivas por (vendedor, mês)
     """
     if not records:
         raise ValueError("Nenhum registro correspondido — relatório não gerado.")
 
-    vendor_values = _calculate_vendor_values(records)
+    if vendor_sales_counts is None:
+        vendor_sales_counts = {}
+
+    vendor_values = _calculate_vendor_values(records, vendor_sales_counts)
 
     wb = openpyxl.Workbook()
     ws = wb.active
