@@ -46,6 +46,14 @@ def _build_xlsx_index(
     return index
 
 
+def _compare_apolice(apol_pdf: str, apol_xlsx: str) -> bool:
+    if not apol_pdf or not apol_xlsx:
+        return False
+    a1 = apol_pdf[-5:] if len(apol_pdf) >= 5 else apol_pdf
+    a2 = apol_xlsx[-5:] if len(apol_xlsx) >= 5 else apol_xlsx
+    return a1 == a2
+
+
 def _eval_match_type(
     pdf_name: str,
     pdf_apolice: str,
@@ -54,16 +62,22 @@ def _eval_match_type(
     is_exact_name: bool
 ) -> str:
     """
-    Avalia o tipo de match baseado no nome e na apólice.
+    Avalia o tipo de match baseado no nome e na apólice (últimos 5 dígitos).
     """
-    if pdf_apolice and xlsx_apolice and pdf_apolice != xlsx_apolice:
-        # Se as duas apólices existem e são diferentes, tem problema
+    if pdf_apolice and not xlsx_apolice:
+        if is_exact_name:
+            return "APOLICE_AUSENTE_XLSX"
+        else:
+            return "FUZZY_APOLICE_AUSENTE_XLSX"
+
+    if pdf_apolice and xlsx_apolice and not _compare_apolice(pdf_apolice, xlsx_apolice):
+        # Se as duas apólices existem e são diferentes nos últimos 5 dígitos
         if is_exact_name:
             return "APOLICE_DIFERENTE"
         else:
             return "FUZZY_APOLICE_DIFERENTE"
     else:
-        # Apólices batem, ou uma das duas está vazia
+        # Apólices batem, ou o PDF não tem apólice
         if is_exact_name:
             return "EXATO"
         else:
