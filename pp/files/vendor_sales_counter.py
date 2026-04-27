@@ -38,8 +38,9 @@ def extract_month_from_sheet_name(sheet_name: str) -> str:
     Exemplos:
         "JAN 26"          → "01/26"
         "FEV 26 ELIDA"    → "02/26"
-        "FEV 26 SUELANE"  → "02/26"
-        "MAR 26"          → "03/26"
+        "SETEMBRO 25"     → "09/25"
+        "JUNHO_25"        → "06/25"
+        "MARÇO 2025"      → "03/25"
 
     Retorna string "MM/YY" ou string vazia se não conseguir extrair.
     """
@@ -47,9 +48,8 @@ def extract_month_from_sheet_name(sheet_name: str) -> str:
 
     for name, num in _MONTH_NAMES.items():
         if upper.startswith(name):
-            # Extrair o ano (dois dígitos após o nome do mês)
-            rest = upper[len(name):].strip()
-            year_match = re.match(r"(\d{2,4})", rest)
+            # Extrair o ano (primeira sequência de 2 a 4 dígitos que encontrar na string)
+            year_match = re.search(r"(\d{2,4})", upper)
             if year_match:
                 year = year_match.group(1)
                 # Se ano com 4 dígitos, pegar últimos 2
