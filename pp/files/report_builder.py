@@ -109,7 +109,7 @@ def _write_data_rows(
         # Dados normais
         ws.cell(row=row_idx, column=1, value=record.segurado.upper())
         ws.cell(row=row_idx, column=2, value="ESTORNO")
-        ws.cell(row=row_idx, column=3, value=_format_inicio_vig(record.inicio_vig))
+        ws.cell(row=row_idx, column=3, value=record.sheet_name.upper())
         ws.cell(row=row_idx, column=4, value=record.vendedor.upper())
         ws.cell(row=row_idx, column=5, value=record.apolice_pdf)
 
