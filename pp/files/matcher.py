@@ -101,10 +101,6 @@ def _find_matches_for_segurado(
     # 1. Correspondência exata no índice
     exact = index.get(normalized_segurado)
     if exact:
-        if len(exact) > 1 and pdf_rec.apolice:
-            with_apolice = [r for r in exact if _compare_apolice(pdf_rec.apolice, r.apolice)]
-            if with_apolice:
-                exact = with_apolice
         for rec in exact:
             m_type = _eval_match_type(normalized_segurado, pdf_rec.apolice, normalize_name(rec.cliente), rec.apolice, True)
             matches.append((rec, m_type))
@@ -113,10 +109,6 @@ def _find_matches_for_segurado(
     # 2. Fallback 1: percorre o índice e testa token a token com regra do Ç
     for normalized_client, records in index.items():
         if names_match(normalized_segurado, normalized_client):
-            if len(records) > 1 and pdf_rec.apolice:
-                with_apolice = [r for r in records if _compare_apolice(pdf_rec.apolice, r.apolice)]
-                if with_apolice:
-                    records = with_apolice
             for rec in records:
                 m_type = _eval_match_type(normalized_segurado, pdf_rec.apolice, normalized_client, rec.apolice, True)
                 matches.append((rec, m_type))
@@ -138,11 +130,6 @@ def _find_matches_for_segurado(
                 best_records.append(rec)
                 
     if best_records:
-        if len(best_records) > 1 and pdf_rec.apolice:
-            with_apolice = [r for r in best_records if _compare_apolice(pdf_rec.apolice, r.apolice)]
-            if with_apolice:
-                best_records = with_apolice
-
         for rec in best_records:
             m_type = _eval_match_type(normalized_segurado, pdf_rec.apolice, normalize_name(rec.cliente), rec.apolice, False)
             matches.append((rec, m_type))
