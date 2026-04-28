@@ -106,17 +106,30 @@ if st.button(
 
                 # Deduplicar registros entre múltiplos PDFs
                 for rec in records:
-                    key = (rec.segurado.upper(), rec.inicio_vig, rec.apolice)
+                    # Verifica se já existe a mesma pessoa/data em all_pdf_records
+                    existing_idx = -1
+                    for i, e in enumerate(all_pdf_records):
+                        if e.segurado.upper() == rec.segurado.upper() and e.inicio_vig == rec.inicio_vig:
+                            if e.apolice == rec.apolice:
+                                existing_idx = i
+                                break
+                            elif not e.apolice:
+                                # Já existe um vazio, e o atual pode ter (ou ser vazio também)
+                                existing_idx = i
+                                break
+                            elif not rec.apolice:
+                                # O novo é vazio e já existe um com apólice
+                                existing_idx = i
+                                break
                     
-                    if key not in seen_pdf_keys:
-                        # Se não tem apólice, evita adicionar se já existe uma entrada (com ou sem apólice)
-                        if not rec.apolice:
-                            exists = any(k[0] == key[0] and k[1] == key[1] for k in seen_pdf_keys)
-                            if exists:
-                                continue
-                                
-                        seen_pdf_keys.add(key)
+                    if existing_idx == -1:
+                        # Não existe ninguém com essa data/nome (ou existem, mas as apólices são diferentes e válidas)
                         all_pdf_records.append(rec)
+                    else:
+                        # Já existe. Vamos ver se o existente é vazio e o novo tem apólice
+                        e = all_pdf_records[existing_idx]
+                        if not e.apolice and rec.apolice:
+                            all_pdf_records[existing_idx] = rec
 
         if not all_pdf_records:
             st.warning("Nenhum registro com comissão negativa encontrado nos PDFs.")
@@ -169,11 +182,11 @@ if st.button(
                 expanded=True,
             ):
                 st.markdown(
-                    "Os seguintes nomes estão no PDF com comissão negativa, "
+                    "Os seguintes seguros estão no PDF com comissão negativa, "
                     "mas **não foram localizados** em nenhuma aba da planilha:"
                 )
-                for name in not_found:
-                    st.markdown(f"- `{name}`")
+                for rec in not_found:
+                    st.markdown(f"- `{rec.segurado}` (Início: {rec.inicio_vig} | Apólice: {rec.apolice})")
 
         if not matched_records:
             st.error("Nenhum registro pôde ser cruzado. Relatório não gerado.")

@@ -26,6 +26,7 @@ import openpyxl
 from openpyxl.styles import Alignment, Font, PatternFill
 
 from matcher import MatchedRecord
+from pdf_parser import PDFRecord
 from vendor_sales_counter import get_estorno_value
 
 
@@ -171,26 +172,40 @@ def _set_column_widths(ws) -> None:
         ws.column_dimensions[letter].width = width
 
 
-def _write_not_found_sheet(wb, not_found: List[str]) -> None:
+def _write_not_found_sheet(wb, not_found: List[PDFRecord]) -> None:
     """
     Cria uma aba "NÃO ENCONTRADOS" no workbook com a lista de segurados
-    que não foram localizados na planilha de comissões.
+    que não foram localizados na planilha de comissões, incluindo suas apólices e vigência.
     """
     ws = wb.create_sheet(title="NÃO ENCONTRADOS")
 
+    headers = ["SEGURADO", "INÍCIO VIGÊNCIA", "APÓLICE"]
+    widths = [50, 20, 20]
+
     # Cabeçalho
-    header_cell = ws.cell(row=1, column=1, value="SEGURADO")
-    header_cell.font = Font(name=_FONT_NAME, bold=True)
-    header_cell.fill = _FILL_HEADER
-    header_cell.alignment = Alignment(horizontal="center")
+    for col_idx, header in enumerate(headers, start=1):
+        cell = ws.cell(row=1, column=col_idx, value=header)
+        cell.font = Font(name=_FONT_NAME, bold=True)
+        cell.fill = _FILL_HEADER
+        cell.alignment = Alignment(horizontal="center")
 
     # Dados
-    for row_idx, name in enumerate(not_found, start=2):
-        cell = ws.cell(row=row_idx, column=1, value=name.upper())
-        cell.font = Font(name=_FONT_NAME)
+    for row_idx, rec in enumerate(not_found, start=2):
+        cell_nome = ws.cell(row=row_idx, column=1, value=rec.segurado.upper())
+        cell_nome.font = Font(name=_FONT_NAME)
+        
+        cell_vig = ws.cell(row=row_idx, column=2, value=rec.inicio_vig)
+        cell_vig.font = Font(name=_FONT_NAME)
+        cell_vig.alignment = Alignment(horizontal="center")
+        
+        cell_apolice = ws.cell(row=row_idx, column=3, value=rec.apolice)
+        cell_apolice.font = Font(name=_FONT_NAME)
+        cell_apolice.alignment = Alignment(horizontal="center")
 
     # Largura da coluna
-    ws.column_dimensions["A"].width = 50
+    col_letters = ["A", "B", "C"]
+    for letter, width in zip(col_letters, widths):
+        ws.column_dimensions[letter].width = width
 
 
 # ── Ponto de entrada público ──────────────────────────────────────────────────
@@ -198,7 +213,7 @@ def _write_not_found_sheet(wb, not_found: List[str]) -> None:
 def build_report(
     records: List[MatchedRecord],
     output_path: str,
-    not_found: List[str] | None = None,
+    not_found: List[PDFRecord] | None = None,
     vendor_sales_counts: Dict[Tuple[str, str], int] | None = None,
 ) -> None:
     """

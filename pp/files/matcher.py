@@ -96,12 +96,23 @@ def _filter_best_matches(
     if len(matches) <= 1:
         return matches
 
-    # Verifica se existe algum match com apólice exata (ou ausente no XLSX mas presente no PDF, etc)
-    # A prioridade é: EXATO > FUZZY > APOLICE_AUSENTE_XLSX > APOLICE_DIFERENTE
-    exact_matches = [m for m in matches if m[1] in ("EXATO", "FUZZY")]
+    # Verifica se existe algum match com apólice exata E nome exato
+    exact_matches = [m for m in matches if m[1] == "EXATO"]
     if exact_matches:
-        # Se tem apólice exata, ignoramos os que têm apólice diferente
-        return exact_matches
+        # Se a apólice bate perfeitamente E o nome bate, e existem múltiplos na planilha, 
+        # isso indica linhas duplicadas pela digitação. Retorna só o primeiro 
+        # para evitar cobrar o estorno do vendedor duas vezes.
+        return [exact_matches[0]]
+        
+    # Verifica se existe algum match FUZZY (nome aproximado, mas apólice exata)
+    fuzzy_exact_apolice_matches = [m for m in matches if m[1] == "FUZZY"]
+    if fuzzy_exact_apolice_matches:
+        # Pega só o primeiro para evitar dupla cobrança por linhas duplicadas na planilha
+        first_fuzzy = fuzzy_exact_apolice_matches[0]
+        out = [first_fuzzy]
+        # Repassa junto todas as outras ambiguidades de apólice (se houverem)
+        out.extend([m for m in matches if m[1] not in ("EXATO", "FUZZY")])
+        return out
 
     return matches
 
@@ -136,30 +147,45 @@ def _find_matches_for_segurado(
             return _filter_best_matches(matches)
 
     # 3. Fallback 2: Fuzzy matching
-    best_score = 0
-    best_records = []
+    best_score_apolice_match = 0
+    best_records_apolice_match = []
+    
+    best_score_no_apolice = 0
+    best_records_no_apolice = []
     
     for rec in all_xlsx_records:
         norm_client = normalize_name(rec.cliente)
         score = fuzz.token_sort_ratio(normalized_segurado, norm_client)
         
-        # O limiar básico é 85, mas só aceitamos cego se > 92 ou se a apólice bater perfeitamente
         if score > 85:
             apolice_matches = _compare_apolice(pdf_rec.apolice, rec.apolice)
-            # Se a apólice for diferente, exigimos um score bem maior (92) para evitar falsos positivos
-            if not apolice_matches and score <= 92:
-                continue
-
-            if score > best_score:
-                best_score = score
-                best_records = [rec]
-            elif score == best_score:
-                best_records.append(rec)
+            if apolice_matches:
+                # O nome é fuzzy, mas a apólice bate perfeitamente
+                if score > best_score_apolice_match:
+                    best_score_apolice_match = score
+                    best_records_apolice_match = [rec]
+                elif score == best_score_apolice_match:
+                    best_records_apolice_match.append(rec)
+            else:
+                # A apólice NÃO bate. Só consideramos nomes incrivelmente próximos (>92)
+                if score > 92:
+                    if score > best_score_no_apolice:
+                        best_score_no_apolice = score
+                        best_records_no_apolice = [rec]
+                    elif score == best_score_no_apolice:
+                        best_records_no_apolice.append(rec)
                 
-    if best_records:
-        for rec in best_records:
+    if best_records_apolice_match:
+        for rec in best_records_apolice_match:
             m_type = _eval_match_type(normalized_segurado, pdf_rec.apolice, normalize_name(rec.cliente), rec.apolice, False)
             matches.append((rec, m_type))
+            
+    if best_records_no_apolice:
+        for rec in best_records_no_apolice:
+            m_type = _eval_match_type(normalized_segurado, pdf_rec.apolice, normalize_name(rec.cliente), rec.apolice, False)
+            matches.append((rec, m_type))
+            
+    if matches:
         return _filter_best_matches(matches)
 
     return matches
@@ -168,25 +194,25 @@ def _find_matches_for_segurado(
 def match_records(
     pdf_records: List[PDFRecord],
     xlsx_records: List[XLSXRecord],
-) -> Tuple[List[MatchedRecord], List[str]]:
+) -> Tuple[List[MatchedRecord], List[PDFRecord]]:
     """
     Cruza os registros do PDF com os do XLSX.
 
     Retorna:
         matched   — lista de MatchedRecord (uma entrada por combinação segurado + vendedor)
-        not_found — nomes de segurados sem nenhuma correspondência no XLSX
+        not_found — registros do PDF sem nenhuma correspondência no XLSX
     """
     index = _build_xlsx_index(xlsx_records)
 
     matched: List[MatchedRecord] = []
-    not_found: List[str] = []
+    not_found: List[PDFRecord] = []
 
     for pdf_rec in pdf_records:
         normalized = normalize_name(pdf_rec.segurado)
         xlsx_matches = _find_matches_for_segurado(pdf_rec, normalized, index, xlsx_records)
 
         if not xlsx_matches:
-            not_found.append(pdf_rec.segurado)
+            not_found.append(pdf_rec)
             continue
 
         for xlsx_rec, match_type in xlsx_matches:
