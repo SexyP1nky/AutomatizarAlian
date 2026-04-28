@@ -30,7 +30,7 @@ st.set_page_config(
 )
 
 st.title("📋 Gerador de Controle de Estornos")
-st.markdown("**Versão: 2.1.0** — *Com suporte a apólices e fuzzy matching*")
+st.markdown("**Versão: 2.1.0**")
 st.markdown(
     "Faça o upload do(s) **relatório(s) PDF** e da(s) **planilha(s) de comissões (XLSX)** "
     "para gerar automaticamente o controle de estornos."
