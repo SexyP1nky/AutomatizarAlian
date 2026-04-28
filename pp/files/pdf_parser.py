@@ -331,23 +331,28 @@ def _deduplicate_and_collect(
         existing = seen.get(key)
         
         if existing is None:
-            # Se não tem apólice, vamos checar se já existe um registro sem apólice para mesma pessoa/data
             if not rec.apolice:
-                # Procura se já existe a mesma pessoa/data (com ou sem apolice)
+                # O novo NÃO tem apólice. Só adicionamos se não houver NENHUM (com ou sem apólice)
                 for k, v in list(seen.items()):
                     if k[0] == rec.segurado.upper() and k[1] == rec.inicio_vig:
-                        # Se já existe, não adicionamos este novo (ele não tem apolice, não traz info nova)
                         return
-                        
-            seen[key] = rec
-            records.append(rec)
-            
-        elif not existing.apolice and rec.apolice:
-            # Substitui se o novo registro tem apólice e o existente não
-            # Na verdade, com a nova key, isso só acontece se ambos tivessem apolice='' na key
-            idx = records.index(existing)
-            records[idx] = rec
-            seen[key] = rec
+                
+                seen[key] = rec
+                records.append(rec)
+            else:
+                # O novo TEM apólice. Verifica se já existe um SEM apólice para substituir
+                for k, v in list(seen.items()):
+                    if k[0] == rec.segurado.upper() and k[1] == rec.inicio_vig and not k[2]:
+                        # Substitui o sem apólice pelo novo na lista e dicionário
+                        idx = records.index(v)
+                        records[idx] = rec
+                        del seen[k]
+                        seen[key] = rec
+                        return
+                
+                # Se não achou nenhum vazio para substituir, adiciona como novo
+                seen[key] = rec
+                records.append(rec)
 
     with pdfplumber.open(pdf_path) as pdf:
         for page in pdf.pages:

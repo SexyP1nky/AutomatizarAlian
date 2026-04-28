@@ -117,7 +117,12 @@ def _extract_records_from_sheet(
         if apolice_col is not None:
             apolice_val = row.iloc[apolice_col]
             if pd.notna(apolice_val):
-                apolice_str = _normalize_apolice(str(apolice_val))
+                # Proteção contra o Pandas convertendo colunas numéricas com NaN para float (ex: 12345.0)
+                if isinstance(apolice_val, float) and apolice_val.is_integer():
+                    raw_str = str(int(apolice_val))
+                else:
+                    raw_str = str(apolice_val).strip()
+                apolice_str = _normalize_apolice(raw_str)
 
         records.append(
             XLSXRecord(
